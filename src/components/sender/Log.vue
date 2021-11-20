@@ -35,8 +35,8 @@ export default {
   font-family: monospace;
   height: 300px;
   margin-top: 10px;
-  overflow-x: hidden;
-  overflow-y: scroll;
+  overflow-x: auto;
+  overflow-y: auto;
   padding: 5px;
   width: 100%;
 }
