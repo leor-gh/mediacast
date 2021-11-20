@@ -1,8 +1,22 @@
 <template>
   <div class="controls container">
+    <label for="application">Chromecast Receiver Application</label>
+    <select v-model="applicationId" class="u-full-width" id="application">
+      <option value="CC1AD845">Default Media Receiver</option>
+      <option value="A55EBA47">MediaCast Receiver</option>
+      <!-- <option value="B24212A8">MediaCast Receiver Dev</option> -->
+    </select>
+
     <label>Media URL</label>
     <input
       v-model="mediaUrl"
+      class="u-full-width"
+      type="text"
+    />
+
+    <label>Subtitle URL</label>
+    <input
+      v-model="subtitleUrl"
       class="u-full-width"
       type="text"
     />
@@ -28,6 +42,8 @@
       <button v-on:click="loadMedia" v-if="connected">Load Media</button>
       <button v-on:click="stop" v-if="connected">Stop</button>
       <button v-on:click="testMessage" v-if="connected">Test Message</button>
+      <button v-on:click="toggleSubtitle" v-if="connected && subtitle.length && !subtitleActive">Subtitle</button>
+      <button v-on:click="toggleSubtitle" class="button active" v-if="connected && subtitle.length && subtitleActive">Subtitle</button>
       <label class="debug-toggle" for="checkbox" v-if="connected">
         <input type="checkbox" id="checkbox" v-model="debugEnabled" @change="onDebugChange($event)">
         <span>Debug Panel</span>
@@ -39,9 +55,9 @@
       <button class="material-icons" v-on:click="pause" v-if="playing">pause_arrow</button>
       <button class="material-icons" v-on:click="play" v-else>play_arrow</button>
       <input class="seekBar" type="range" step="any" min="0" v-bind:max="duration" v-bind:value="currentTime" @change="onSeekChange">
-      <button class="rewindButton material-icons">fast_rewind</button>
+      <button class="material-icons" v-on:click="rewind" v-if="duration > 0">fast_rewind</button>
       <div class="currentTime">{{timeString}}</div>
-      <button class="fastForwardButton material-icons">fast_forward</button>
+      <button class="material-icons" v-on:click="forward">fast_forward</button>
       <button class="muteButton material-icons" v-on:click="setMute" v-if="muted">volume_mute</button>
       <button class="muteButton material-icons" v-on:click="setMute" v-else>volume_up</button>
       <input
@@ -68,7 +84,7 @@ import '@/assets/normalize.css';
 import '@/assets/skeleton.css';
 import '@/assets/player-controls.css';
 
-const { namespace, applicationId, defaultUrl, defaultLicenseUrl, defaultDrm } = config;
+const { namespace, defaultApplicationId, defaultUrl, defaultSubtitleUrl, defaultLicenseUrl, defaultDrm } = config;
 
 export default {
   name: 'sender',
@@ -77,20 +93,25 @@ export default {
   },
   data() {
     return {
+      applicationId: defaultApplicationId,
       mediaUrl: defaultUrl,
+      subtitleUrl: defaultSubtitleUrl,
       licenseUrl: defaultLicenseUrl,
       drm: defaultDrm,
       connected: false,
       loaded: false,
-      debugEnabled: true,
+      debugEnabled: false,
       playing: false,
       seeking: false,
       duration: 0,
       currentTime: 0,
+      prevTime: 0,
       volume: 0.70,
       savedVolume: 0.70,
       muted: false,
       debugLog: [],
+      subtitle: [],
+      subtitleActive: false,
     }
   },
   computed: {
@@ -108,8 +129,16 @@ export default {
   methods: {
     setQueryParams() {
       // Check if query params are set.
+      if (this.$route.query.application) {
+        this.applicationId = this.$route.query.application;
+      }
+
       if (this.$route.query.url) {
         this.mediaUrl = this.$route.query.url;
+      }
+
+      if (this.$route.query.subtitleUrl) {
+        this.subtitleUrl = this.$route.query.subtitleUrl;
       }
 
       if (this.$route.query.licenseUrl) {
@@ -130,29 +159,80 @@ export default {
       };
     },
 
+    reset() {
+      this.connected = false;
+      this.loaded = false;
+      this.debugEnabled = false;
+      this.playing = false;
+      this.seeking = false;
+      this.duration = 0;
+      this.currentTime = 0;
+      this.prevTime = 0;
+      this.volume = 0.70;
+      this.savedVolume = 0.70;
+      this.muted = false;
+      // this.debugLog = [];
+      this.subtitle = [];
+      this.subtitleActive = false;
+    },
+
     initializeCastApi() {
-      this.log('[mediacast] - Initializing Cast API: ', applicationId);
+      this.log('[mediacast] - Initializing Cast API');
       window.cast.framework.setLoggerLevel(cast.framework.LoggerLevel.DEBUG);
-      window.cast.framework.CastContext.getInstance().setOptions({
-          receiverApplicationId: applicationId,
-          autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
-      });
       this.setPlayerEvents();
     },
 
     connect() {
+      var id = !this.applicationId ? chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID : this.applicationId;
+      window.cast.framework.CastContext.getInstance().setOptions({
+          receiverApplicationId: id,
+          autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
+      });
+      this.log('[mediacast] - Connecting to: ', id);
       if (cast) {
         cast.framework.CastContext.getInstance().requestSession();
       }
     },
 
     loadMedia() {
-      const { mediaUrl, licenseUrl, drm } = this;
+      const { mediaUrl, subtitleUrl, licenseUrl, drm } = this;
 
-      const contentType = 'application/dash+xml';
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
-      const mediaInfo = new window.chrome.cast.media.MediaInfo(mediaUrl, contentType);
+      const mediaInfo = new window.chrome.cast.media.MediaInfo(mediaUrl, 'video/mp4');
       mediaInfo.customData = { licenseUrl, drm };
+
+      if (drm != "none" && this.applicationId == chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID) {
+        this.log('[mediacast:loadMedia] - Default Media Receiver cannot play DRM content');
+        return;
+      }
+
+      var pathname = new URL(mediaUrl).pathname.toLowerCase();
+      if (pathname.endsWith('.m3u8')) {
+        mediaInfo.contentType = 'application/x-mpegURL';
+        mediaInfo.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.TS;
+      } else if (pathname.endsWith('.ts')) {
+        mediaInfo.contentType = 'video/MP2T';
+        // mediaInfo.hlsSegmentFormat = chrome.cast.media.HlsSegmentFormat.TS;
+      } else if (pathname.endsWith('.mpd')) {
+        mediaInfo.contentType = 'application/dash+xml';
+      } else if (pathname.endsWith('.ism')) {
+        mediaInfo.contentType = 'application/vnd.ms-sstr+xml';
+      }
+
+      var subt = null;
+      if (subtitleUrl) {
+        // assume English subtitle
+        subt = new chrome.cast.media.Track(1, // track ID
+          chrome.cast.media.TrackType.TEXT);
+        subt.trackContentId = subtitleUrl;
+        // subt.trackContentType = 'text/vtt';
+        subt.subtype = chrome.cast.media.TextTrackType.SUBTITLES;
+        subt.name = 'English Subtitles';
+        subt.language = 'en-US';
+        subt.customData = null;
+        mediaInfo.tracks = [subt];
+      }
+
       const request = new window.chrome.cast.media.LoadRequest(mediaInfo);
 
 
@@ -177,7 +257,8 @@ export default {
       playerController.addEventListener(
         cast.framework.RemotePlayerEventType.IS_MEDIA_LOADED_CHANGED,
         (event) => {
-          this.log('[mediacast:onIsMediaLoadedChanged] - ', JSON.stringify(event));
+          this.log('[mediacast:onIsMediaLoadedChanged] - ', event.value);
+          this.loaded = event.value;
         }
       );
 
@@ -189,7 +270,7 @@ export default {
       playerController.addEventListener(
         cast.framework.RemotePlayerEventType.DURATION_CHANGED,
         (event) => {
-          this.log('[mediacast:onDurationChanged] - ', JSON.stringify(event));
+          this.log('[mediacast:onDurationChanged] - ', event.value);
         }
       );
 
@@ -203,11 +284,16 @@ export default {
         this.onPlayerStateChanged,
       );
 
+      playerController.addEventListener(
+        cast.framework.RemotePlayerEventType.VIDEO_INFO_CHANGED,
+        this.onVideoInfoChanged,
+      );
+
       // For debugging.
       // playerController.addEventListener(
       //   cast.framework.RemotePlayerEventType.ANY_CHANGE,
       //   (event) => {
-      //     this.log(event);
+      //     this.log(JSON.stringify(event));
       //   }
       // )
     },
@@ -250,11 +336,13 @@ export default {
 
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       const media = castSession.getMediaSession();
-      castSession.sendMessage('urn:x-cast:com.google.cast.media', {
-        type: 'STOP',
-        requestId: 1,
-        mediaSessionId: media.mediaSessionId,
-      });
+      if (media) {
+        castSession.sendMessage('urn:x-cast:com.google.cast.media', {
+          type: 'STOP',
+          requestId: 1,
+          mediaSessionId: media.mediaSessionId,
+        });
+      }
     },
 
     seekTo(value) {
@@ -272,6 +360,19 @@ export default {
         currentTime: value,
       });
       this.play();
+    },
+
+    rewind() {
+      this.log('[mediacast:rewind] - rewind 30 seconds');
+      this.seekTo(this.currentTime - 30);
+    },
+
+    forward() {
+      this.log('[mediacast:forward] - forward 30 seconds');
+      var to = this.currentTime + 30;
+      if (this.duration > 0 && to > this.duration)
+        to = this.duration - 1;
+      this.seekTo(to);
     },
 
     setVolume(value) {
@@ -300,17 +401,35 @@ export default {
       castSession.setMute(this.muted);
     },
 
+    toggleSubtitle() {
+      const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
+      const media = castSession.getMediaSession();
+
+      if (media) {
+        let s = ( ) => this.log('[mediacast:toggleSubtitle] - ', (this.subtitleActive ? 'en' : 'dis') + 'abled');
+        let f = (e) => this.log('[mediacast:toggleSubtitle] - editTracksInfo failed', JSON.stringify(e));
+        if (this.subtitleActive) {
+          media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest([]), s, f);
+        } else {
+          media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(this.subtitle), s, f);
+        }
+        this.subtitleActive = !this.subtitleActive;
+      }
+    },
+
     testMessage() {
       this.sendMessage("Test");
     },
 
     sendMessage(message) {
       this.log('[mediacast:sendMessage] - ', message);
+      if (!(this.applicationId == 'A55EBA47' || this.applicationId == 'B24212A8')) return;
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       castSession.sendMessage(namespace, { message: message });
     },
 
     onDebugChange() {
+      if (!(this.applicationId == 'A55EBA47' || this.applicationId == 'B24212A8')) return;
       this.log('[mediacast:setDebugPanel] - ', this.debugEnabled);
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       castSession.sendMessage(namespace, { action: 'setDebugPanel', message: this.debugEnabled });
@@ -335,26 +454,59 @@ export default {
     onMediaInfoChanged(event) {
       this.log('[mediacast:onMediaInfoChanged] - ', JSON.stringify(event));
       this.duration = event.value && event.value.duration;
+
+      var tracks = event.value && event.value.tracks;
+      if (tracks) {
+        let t = [];
+        tracks.forEach(e => {
+          if (e.type == chrome.cast.media.TrackType.TEXT)
+            t.push(e.trackId);
+        });
+        this.subtitle = t;
+        if (!t.length) this.subtitleActive = false;
+      }
     },
 
     onCurrentTimeChanged(event) {
-      this.log('[mediacast:onCurrentTimeChanged] - ', JSON.stringify(event));
+      // this.log('[mediacast:onCurrentTimeChanged] - ', event.value);
       if (!this.seeking) {
+        this.prevTime = this.currentTime;
         this.currentTime = event.value;
       }
     },
 
     onIsConnectedChanged(event) {
-      this.log('[mediacast:onIsConnectedChanged] - ', JSON.stringify(event));
+      this.log('[mediacast:onIsConnectedChanged] - ', event.value);
       this.connected = event.value;
+      if (this.connected && this.applicationId == 'A55EBA47')
+        this.debugEnabled = true;
+      if (!this.connected) {
+        window.cast.framework.CastContext.getInstance().endCurrentSession();
+        this.reset(); 
+      }
     },
 
     onPlayerStateChanged(event) {
-      this.log('[mediacast:onPlayerStateChanged] - ', JSON.stringify(event));
+      this.log('[mediacast:onPlayerStateChanged] - ', event.value);
       this.playing = event.value === 'PLAYING' || event.value === 'BUFFERING';
+
+      const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
+      const media = castSession.getMediaSession();
+
       if (event.value === 'PLAYING') {
         this.seeking = false;
+        this.log('[mediacast:onPlayerStateChanged] - videoInfo: ', JSON.stringify(media.videoInfo));
       }
+      if (event.value === 'IDLE') {
+        if (media) {
+          this.log('[mediacast:onPlayerStateChanged] - idle Reason: ', media.idleReason);
+        }
+        this.log('[mediacast:onPlayerStateChanged] - last played position: ', this.prevTime);
+      }
+    },
+
+    onVideoInfoChanged(event) {
+      this.log('[mediacast:onVideoInfoChanged] - ', JSON.stringify(event));
     },
 
     log(...message) {
