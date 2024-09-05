@@ -529,6 +529,9 @@ export default {
 
 .control-buttons {
   display: inline-block;
+}
+
+.control-buttons button {
   margin-bottom: 10px;
 }
 
