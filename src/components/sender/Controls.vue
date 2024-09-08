@@ -39,15 +39,20 @@
       <button v-on:click="connect" class="button active" v-if="connected">Connected</button>
       <button v-on:click="connect" class="button-primary" :disabled="!isChrome" v-else>Connect</button>
       <span v-if="!isChrome">Google Chrome required!</span>
-      <button v-on:click="loadMedia" v-if="connected">Load Media</button>
-      <button v-on:click="stop" v-if="connected">Stop</button>
-      <button v-on:click="testMessage" v-if="connected">Test Message</button>
-      <button v-on:click="toggleSubtitle" v-if="connected && subtitle.length && !subtitleActive">Subtitle</button>
-      <button v-on:click="toggleSubtitle" class="button active" v-if="connected && subtitle.length && subtitleActive">Subtitle</button>
-      <label class="debug-toggle" for="checkbox" v-if="connected">
-        <input type="checkbox" id="checkbox" v-model="debugEnabled" @change="onDebugChange($event)">
-        <span>Debug Panel</span>
-      </label>
+      <span v-if="connected" style="margin-left: 0px">
+        <button v-on:click="loadMedia">Load Media</button>
+        <button v-on:click="stop">Stop</button>
+        <button v-for="(item, idx) in tracks.text" :key=item
+          :class="activeTracks[item] === true ? 'button active' : ''"
+          v-on:click="toggleSubtitle(item)">Subtitle {{idx + 1}}</button>
+        <span v-if="debuggable" style="margin-left: 0px">
+          <button v-on:click="testMessage">Test Message</button>
+          <label class="debug-toggle" for="checkbox">
+            <input type="checkbox" id="checkbox" v-model="debugEnabled" @change="onDebugChange($event)">
+            <span>Debug Panel</span>
+          </label>
+        </span>
+      </span>
     </div>
 
 
@@ -110,8 +115,11 @@ export default {
       savedVolume: 0.70,
       muted: false,
       debugLog: [],
-      subtitle: [],
-      subtitleActive: false,
+      tracks: {
+        loaded: false,
+        text: [],
+      },
+      activeTracks: {},
     }
   },
   computed: {
@@ -120,7 +128,10 @@ export default {
     },
     isChrome: function() {
       return utils.isChrome();
-    }
+    },
+    debuggable: function() {
+      return (this.applicationId == 'A55EBA47' || this.applicationId == 'B24212A8');
+    },
   },
   mounted() {
     this.setQueryParams();
@@ -160,7 +171,6 @@ export default {
     },
 
     reset() {
-      this.connected = false;
       this.loaded = false;
       this.debugEnabled = false;
       this.playing = false;
@@ -172,8 +182,9 @@ export default {
       this.savedVolume = 0.70;
       this.muted = false;
       // this.debugLog = [];
-      this.subtitle = [];
-      this.subtitleActive = false;
+      this.tracks.loaded = false;
+      this.tracks.text = [];
+      this.activeTracks = {};
     },
 
     initializeCastApi() {
@@ -259,6 +270,7 @@ export default {
         (event) => {
           this.log('[mediacast:onIsMediaLoadedChanged] - ', event.value);
           this.loaded = event.value;
+          if (!this.loaded) this.reset();
         }
       );
 
@@ -401,19 +413,31 @@ export default {
       castSession.setMute(this.muted);
     },
 
-    toggleSubtitle() {
+    toggleSubtitle(track) {
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       const media = castSession.getMediaSession();
 
       if (media) {
-        let s = ( ) => this.log('[mediacast:toggleSubtitle] - ', (this.subtitleActive ? 'en' : 'dis') + 'abled');
-        let f = (e) => this.log('[mediacast:toggleSubtitle] - editTracksInfo failed', JSON.stringify(e));
-        if (this.subtitleActive) {
-          media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest([]), s, f);
-        } else {
-          media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(this.subtitle), s, f);
-        }
-        this.subtitleActive = !this.subtitleActive;
+        let req = [];
+        Object.keys(this.activeTracks).forEach(e => {
+          e = parseInt(e);
+          if (e == track) {
+            if (!this.activeTracks[e]) req.push(e);
+          }
+          else if (this.activeTracks[e]) req.push(e);
+        });
+
+        let f = (e) => {
+          let msg;
+          if (e === undefined) {
+            this.activeTracks[track] = !this.activeTracks[track];
+            msg = ['', JSON.stringify(this.activeTracks)];
+          } else
+            msg = ['editTracksInfo failed', JSON.stringify(e)];
+          this.log('[mediacast:toggleSubtitle] - ' + msg[0], msg[1]);
+        };
+
+        media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(req), f, f);
       }
     },
 
@@ -423,13 +447,13 @@ export default {
 
     sendMessage(message) {
       this.log('[mediacast:sendMessage] - ', message);
-      if (!(this.applicationId == 'A55EBA47' || this.applicationId == 'B24212A8')) return;
+      if (!this.debuggable) return;
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       castSession.sendMessage(namespace, { message: message });
     },
 
     onDebugChange() {
-      if (!(this.applicationId == 'A55EBA47' || this.applicationId == 'B24212A8')) return;
+      if (!this.debuggable) return;
       this.log('[mediacast:setDebugPanel] - ', this.debugEnabled);
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       castSession.sendMessage(namespace, { action: 'setDebugPanel', message: this.debugEnabled });
@@ -455,15 +479,21 @@ export default {
       this.log('[mediacast:onMediaInfoChanged] - ', JSON.stringify(event));
       this.duration = event.value && event.value.duration;
 
-      var tracks = event.value && event.value.tracks;
-      if (tracks) {
-        let t = [];
-        tracks.forEach(e => {
-          if (e.type == chrome.cast.media.TrackType.TEXT)
-            t.push(e.trackId);
-        });
-        this.subtitle = t;
-        if (!t.length) this.subtitleActive = false;
+      if (this.loaded && !this.tracks.loaded) {
+        if (this.tracks.text.length) this.tracks.text = [];
+        var tracks = event.value && event.value.tracks;
+        if (tracks) {
+          tracks.forEach(e => {
+            this.activeTracks[e.trackId] = false;
+            if (e.type == chrome.cast.media.TrackType.TEXT)
+              this.tracks.text.push(e.trackId);
+          });
+        }
+        this.tracks.loaded = true;
+
+        const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
+        const media = castSession.getMediaSession();
+        if (media) media.activeTrackIds.forEach(e => this.activeTracks[e] = true);
       }
     },
 
