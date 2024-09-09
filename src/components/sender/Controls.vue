@@ -42,9 +42,9 @@
       <span v-if="connected" style="margin-left: 0px">
         <button v-on:click="loadMedia">Load Media</button>
         <button v-on:click="stop">Stop</button>
-        <button v-for="(item, idx) in tracks.text" :key=item
-          :class="activeTracks[item] === true ? 'button active' : ''"
-          v-on:click="toggleSubtitle(item)">Subtitle {{idx + 1}}</button>
+        <button v-for="(item, idx) in textTracks" :key=item.id
+          :class="item.active ? 'button active' : ''"
+          v-on:click="toggleTrack(item.id)">Subtitle {{idx + 1}}</button>
         <span v-if="debuggable" style="margin-left: 0px">
           <button v-on:click="testMessage">Test Message</button>
           <label class="debug-toggle" for="checkbox">
@@ -117,9 +117,7 @@ export default {
       debugLog: [],
       tracks: {
         loaded: false,
-        text: [],
       },
-      activeTracks: {},
     }
   },
   computed: {
@@ -131,6 +129,10 @@ export default {
     },
     debuggable: function() {
       return (this.applicationId == 'A55EBA47' || this.applicationId == 'B24212A8');
+    },
+    textTracks: function() {
+      if (!this.tracks.loaded) return [];
+      return this.tracks[chrome.cast.media.TrackType.TEXT];
     },
   },
   mounted() {
@@ -182,9 +184,7 @@ export default {
       this.savedVolume = 0.70;
       this.muted = false;
       // this.debugLog = [];
-      this.tracks.loaded = false;
-      this.tracks.text = [];
-      this.activeTracks = {};
+      this.tracks = { loaded: false };
     },
 
     initializeCastApi() {
@@ -413,31 +413,29 @@ export default {
       castSession.setMute(this.muted);
     },
 
-    toggleSubtitle(track) {
+    editTrackFailed(method) {
+      return (e) => this.log('[mediacast:' + method + '] - editTracksInfo failed', JSON.stringify(e));
+    },
+
+    toggleTrack(track) {
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       const media = castSession.getMediaSession();
 
       if (media) {
         let req = [];
-        Object.keys(this.activeTracks).forEach(e => {
+        Object.keys(this.tracks).forEach(e => {
           e = parseInt(e);
+          if (Number.isNaN(e)) return;
           if (e == track) {
-            if (!this.activeTracks[e]) req.push(e);
+            if (!this.tracks[e].active) req.push(e);
           }
-          else if (this.activeTracks[e]) req.push(e);
+          else if (this.tracks[e].active) req.push(e);
         });
 
-        let f = (e) => {
-          let msg;
-          if (e === undefined) {
-            this.activeTracks[track] = !this.activeTracks[track];
-            msg = ['', JSON.stringify(this.activeTracks)];
-          } else
-            msg = ['editTracksInfo failed', JSON.stringify(e)];
-          this.log('[mediacast:toggleSubtitle] - ' + msg[0], msg[1]);
-        };
-
-        media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(req), f, f);
+        media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(req), () => {
+          this.tracks[track].active = !this.tracks[track].active;
+          this.log('[mediacast:toggleTrack] - ', JSON.stringify(this.tracks));
+        }, this.editTrackFailed('toggleTrack'));
       }
     },
 
@@ -480,20 +478,20 @@ export default {
       this.duration = event.value && event.value.duration;
 
       if (this.loaded && !this.tracks.loaded) {
-        if (this.tracks.text.length) this.tracks.text = [];
         var tracks = event.value && event.value.tracks;
         if (tracks) {
           tracks.forEach(e => {
-            this.activeTracks[e.trackId] = false;
-            if (e.type == chrome.cast.media.TrackType.TEXT)
-              this.tracks.text.push(e.trackId);
+            let o = { id: e.trackId, type: e.type, active: false };
+            this.tracks[o.id] = o;
+            if (this.tracks[o.type] === undefined) this.tracks[o.type] = [];
+            this.tracks[o.type].push(o);
           });
         }
         this.tracks.loaded = true;
 
         const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
         const media = castSession.getMediaSession();
-        if (media) media.activeTrackIds.forEach(e => this.activeTracks[e] = true);
+        if (media) media.activeTrackIds.forEach(e => this.tracks[e].active = true);
       }
     },
 
