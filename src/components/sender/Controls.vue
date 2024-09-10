@@ -42,6 +42,7 @@
       <span v-if="connected" style="margin-left: 0px">
         <button v-on:click="loadMedia">Load Media</button>
         <button v-on:click="stop">Stop</button>
+        <button v-on:click="nextAudio" v-if="audioTracks.length > 1">Next Audio</button>
         <button v-for="(item, idx) in textTracks" :key=item.id
           :class="item.active ? 'button active' : ''"
           v-on:click="toggleTrack(item.id)">Subtitle {{idx + 1}}</button>
@@ -131,8 +132,14 @@ export default {
       return (this.applicationId == 'A55EBA47' || this.applicationId == 'B24212A8');
     },
     textTracks: function() {
+      if (!this.tracks.loaded) return []; // Makes this computed property reactive dependent on tracks.loaded
+      let ret = this.tracks[chrome.cast.media.TrackType.TEXT];
+      return Array.isArray(ret) ? ret : [];
+    },
+    audioTracks: function() {
       if (!this.tracks.loaded) return [];
-      return this.tracks[chrome.cast.media.TrackType.TEXT];
+      let ret = this.tracks[chrome.cast.media.TrackType.AUDIO];
+      return Array.isArray(ret) ? ret : [];
     },
   },
   mounted() {
@@ -413,10 +420,6 @@ export default {
       castSession.setMute(this.muted);
     },
 
-    editTrackFailed(method) {
-      return (e) => this.log('[mediacast:' + method + '] - editTracksInfo failed', JSON.stringify(e));
-    },
-
     toggleTrack(track) {
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       const media = castSession.getMediaSession();
@@ -434,9 +437,52 @@ export default {
 
         media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(req), () => {
           this.tracks[track].active = !this.tracks[track].active;
-          this.log('[mediacast:toggleTrack] - ', JSON.stringify(this.tracks));
+          this.log('[mediacast:toggleTrack] - Track', track, 'is now', (this.tracks[track].active ? '' : 'in') + 'active');
         }, this.editTrackFailed('toggleTrack'));
       }
+    },
+
+    nextAudio() {
+      const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
+      const media = castSession.getMediaSession();
+
+      if (media) {
+        const audio = this.tracks[chrome.cast.media.TrackType.AUDIO];
+        if (audio === undefined) return;
+        let req = [];
+        for (let i = 0; i < audio.length; ++i) {
+          if (audio[i].active) {
+            req.push(audio[++i % audio.length].id);
+            break;
+          }
+        }
+
+        Object.keys(this.tracks).forEach(e => {
+          e = parseInt(e);
+          if (Number.isNaN(e)) return;
+          if (this.tracks[e].type == chrome.cast.media.TrackType.AUDIO) return;
+          if (this.tracks[e].active) req.push(e);
+        });
+
+        let success = () => {
+          let active = 0;
+          audio.forEach(e => e.active = false);
+          media.activeTrackIds.forEach(e => {
+            if (this.tracks[e].type == chrome.cast.media.TrackType.AUDIO) {
+              this.tracks[e].active = true;
+              active = e;
+            }
+          });
+          this.log('[mediacast:toggleTrack] - Audio switched to TrackId ' + active);
+        };
+
+        media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(req),
+          success, this.editTrackFailed('nextAudio'));
+      }
+    },
+
+    editTrackFailed(method) {
+      return (e) => this.log('[mediacast:' + method + '] - editTracksInfo failed', JSON.stringify(e));
     },
 
     testMessage() {
@@ -492,6 +538,14 @@ export default {
         const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
         const media = castSession.getMediaSession();
         if (media) media.activeTrackIds.forEach(e => this.tracks[e].active = true);
+
+        this.log('[mediacast:onMediaInfoChanged] - tracks loaded');
+        Object.keys(this.tracks).forEach(e => {
+          if (Array.isArray(this.tracks[e]))
+            this.log('[mediacast:onMediaInfoChanged] -', e, 'tracks found:', this.tracks[e].length);
+        });
+        if (media) media.activeTrackIds.forEach(e =>
+          this.log('[mediacast:onMediaInfoChanged] - Track', e, 'is active'));
       }
     },
 
