@@ -12,6 +12,7 @@
       v-model="mediaUrl"
       class="u-full-width"
       type="text"
+      :placeholder="placeholder.url"
     />
 
     <label>Subtitle URL</label>
@@ -19,6 +20,7 @@
       v-model="subtitleUrl"
       class="u-full-width"
       type="text"
+      :placeholder="placeholder.sub"
     />
 
     <label>License Server URL</label>
@@ -26,6 +28,7 @@
       v-model="licenseUrl"
       class="u-full-width"
       type="text"
+      :placeholder="placeholder.lic"
     />
 
     <label for="drm">DRM</label>
@@ -100,9 +103,9 @@ export default {
   data() {
     return {
       applicationId: defaultApplicationId,
-      mediaUrl: defaultUrl,
-      subtitleUrl: defaultSubtitleUrl,
-      licenseUrl: defaultLicenseUrl,
+      mediaUrl: '',
+      subtitleUrl: '',
+      licenseUrl: '',
       drm: defaultDrm,
       connected: false,
       loaded: false,
@@ -119,6 +122,7 @@ export default {
       tracks: {
         loaded: false,
       },
+      cachedMediaInfo: '',
     }
   },
   computed: {
@@ -140,6 +144,9 @@ export default {
       if (!this.tracks.loaded) return [];
       let ret = this.tracks[chrome.cast.media.TrackType.AUDIO];
       return Array.isArray(ret) ? ret : [];
+    },
+    placeholder: function() {
+      return { url: defaultUrl, sub: defaultSubtitleUrl, lic: defaultLicenseUrl }
     },
   },
   mounted() {
@@ -192,6 +199,7 @@ export default {
       this.muted = false;
       // this.debugLog = [];
       this.tracks = { loaded: false };
+      this.cachedMediaInfo = '';
     },
 
     initializeCastApi() {
@@ -520,7 +528,13 @@ export default {
     },
 
     onMediaInfoChanged(event) {
-      this.log('[mediacast:onMediaInfoChanged] - ', JSON.stringify(event));
+      let sanitized = JSON.parse(JSON.stringify(event.value))
+      if (sanitized != null) sanitized.streamType = '';
+      let newMediaInfo = JSON.stringify(sanitized);
+      if (this.cachedMediaInfo != newMediaInfo) {
+        this.cachedMediaInfo = newMediaInfo;
+        this.log('[mediacast:onMediaInfoChanged] - ', JSON.stringify(event));
+      }
       this.duration = event.value && event.value.duration;
 
       if (this.loaded && !this.tracks.loaded) {
@@ -647,6 +661,10 @@ button[disabled] {
   border: none;
   outline: none;
   margin-right: 5px;
+}
+
+::placeholder {
+  opacity: 0.7
 }
 </style>
 
