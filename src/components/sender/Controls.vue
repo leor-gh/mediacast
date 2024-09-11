@@ -264,12 +264,12 @@ export default {
       const request = new window.chrome.cast.media.LoadRequest(mediaInfo);
 
 
-      this.sendMessage('ReqID:' + id + '; trying to load mediaUrl: ' + mediaUrl);
+      this.sendMessage('ReqID: ' + id + '; trying to load mediaUrl: ' + mediaUrl);
       castSession.loadMedia(request).then(() => {
         this.log('[mediacast] - loadMedia ReqID: ' + id + '; Load succeeded');
         // this.setPlayerEvents();
       }, (err) => {
-        this.log('[mediacast] - loadMedia ReqID: ' + id + '; Error:' + err);
+        this.log('[mediacast] - loadMedia ReqID: ' + id + '; Error: ' + err);
       });
     },
 
@@ -448,33 +448,35 @@ export default {
     },
 
     toggleTrack(track) {
+      const { tracks } = this;
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       const media = castSession.getMediaSession();
 
       if (media) {
         let req = [];
-        Object.keys(this.tracks).forEach(e => {
+        Object.keys(tracks).forEach(e => {
           e = parseInt(e);
           if (Number.isNaN(e)) return;
           if (e == track) {
-            if (!this.tracks[e].active) req.push(e);
+            if (!tracks[e].active) req.push(e);
           }
-          else if (this.tracks[e].active) req.push(e);
+          else if (tracks[e].active) req.push(e);
         });
 
         media.editTracksInfo(new chrome.cast.media.EditTracksInfoRequest(req), () => {
-          this.tracks[track].active = !this.tracks[track].active;
-          this.log('[mediacast:toggleTrack] - Track', track, 'is now', (this.tracks[track].active ? '' : 'in') + 'active');
+          tracks[track].active = !tracks[track].active;
+          this.log('[mediacast:toggleTrack] - Track', track, 'is now', (tracks[track].active ? '' : 'in') + 'active');
         }, this.editTrackFailed('toggleTrack'));
       }
     },
 
     nextAudio() {
+      const { tracks } = this;
       const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
       const media = castSession.getMediaSession();
 
       if (media) {
-        const audio = this.tracks[chrome.cast.media.TrackType.AUDIO];
+        const audio = tracks[chrome.cast.media.TrackType.AUDIO];
         if (audio === undefined) return;
         let req = [], found = false;
         for (let i = 0; i < audio.length; ++i) {
@@ -486,22 +488,22 @@ export default {
         }
         if (!found) req.push(audio[0].id);
 
-        Object.keys(this.tracks).forEach(e => {
+        Object.keys(tracks).forEach(e => {
           e = parseInt(e);
           if (Number.isNaN(e)) return;
-          if (this.tracks[e].type == chrome.cast.media.TrackType.AUDIO) return;
-          if (this.tracks[e].active) req.push(e);
+          if (tracks[e].type == chrome.cast.media.TrackType.AUDIO) return;
+          if (tracks[e].active) req.push(e);
         });
 
         let success = () => {
           let active = -1;
-          audio.forEach(e => e.active = false);
-          media.activeTrackIds.forEach(e => {
-            if (this.tracks[e].type == chrome.cast.media.TrackType.AUDIO) {
-              this.tracks[e].active = true;
+          for (const e of audio) e.active = false;
+          for (const e of media.activeTrackIds) {
+            if (tracks[e].type == chrome.cast.media.TrackType.AUDIO) {
+              tracks[e].active = true;
               active = e;
             }
-          });
+          }
           this.log('[mediacast:toggleTrack] - Audio switched to TrackId ' + active);
         };
 
@@ -561,12 +563,12 @@ export default {
       if (this.duration && this.loaded && !this.tracks.loaded) {
         var tracks = event.value && event.value.tracks;
         if (tracks) {
-          tracks.forEach(e => {
+          for (const e of tracks) {
             let o = { id: e.trackId, type: e.type, active: false };
             this.tracks[o.id] = o;
             if (this.tracks[o.type] === undefined) this.tracks[o.type] = [];
             this.tracks[o.type].push(o);
-          });
+          }
         }
         this.tracks.loaded = true;
 
@@ -579,8 +581,8 @@ export default {
           if (Array.isArray(this.tracks[e]))
             this.log('[mediacast:onMediaInfoChanged] -', e, 'tracks found:', this.tracks[e].length);
         });
-        if (media && media.activeTrackIds) media.activeTrackIds.forEach(e =>
-          this.log('[mediacast:onMediaInfoChanged] - Track', e, 'is active'));
+        if (media && media.activeTrackIds) for (const e of media.activeTrackIds)
+          this.log('[mediacast:onMediaInfoChanged] - Track', e, 'is active');
       }
     },
 
