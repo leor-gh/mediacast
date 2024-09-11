@@ -123,6 +123,7 @@ export default {
         loaded: false,
       },
       cachedMediaInfo: '',
+      reqId: 0,
     }
   },
   computed: {
@@ -259,15 +260,16 @@ export default {
         mediaInfo.tracks = [subt];
       }
 
+      const id = ++this.reqId;
       const request = new window.chrome.cast.media.LoadRequest(mediaInfo);
 
 
-      this.sendMessage('trying to load mediaUrl: ' + mediaUrl);
+      this.sendMessage('ReqID:' + id + '; trying to load mediaUrl: ' + mediaUrl);
       castSession.loadMedia(request).then(() => {
-        this.log('[mediacast] - Load succeeded');
+        this.log('[mediacast] - loadMedia ReqID: ' + id + '; Load succeeded');
         // this.setPlayerEvents();
       }, (err) => {
-        this.log('[mediacast] - Error:' + err);
+        this.log('[mediacast] - loadMedia ReqID: ' + id + '; Error:' + err);
       });
     },
 
@@ -317,12 +319,29 @@ export default {
       );
 
       // For debugging.
-      // playerController.addEventListener(
-      //   cast.framework.RemotePlayerEventType.ANY_CHANGE,
-      //   (event) => {
-      //     this.log(JSON.stringify(event));
-      //   }
-      // )
+      playerController.addEventListener(
+        cast.framework.RemotePlayerEventType.ANY_CHANGE,
+        (event) => {
+          switch (event.field + "Changed") {
+            case cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED:
+            case cast.framework.RemotePlayerEventType.IS_MEDIA_LOADED_CHANGED:
+            case cast.framework.RemotePlayerEventType.CURRENT_TIME_CHANGED:
+            case cast.framework.RemotePlayerEventType.DURATION_CHANGED:
+            case cast.framework.RemotePlayerEventType.MEDIA_INFO_CHANGED:
+            case cast.framework.RemotePlayerEventType.PLAYER_STATE_CHANGED:
+            case cast.framework.RemotePlayerEventType.VIDEO_INFO_CHANGED:
+              return;  // already handled
+
+            case cast.framework.RemotePlayerEventType.DISPLAY_NAME_CHANGED:
+            case cast.framework.RemotePlayerEventType.STATUS_TEXT_CHANGED:
+            case cast.framework.RemotePlayerEventType.CAN_PAUSE_CHANGED:
+            case cast.framework.RemotePlayerEventType.CAN_SEEK_CHANGED:
+            case cast.framework.RemotePlayerEventType.LIVE_SEEKABLE_RANGE_CHANGED:
+              return;  // ignore
+          }
+          this.log(JSON.stringify(event));
+        }
+      );
     },
 
     play() {
@@ -457,13 +476,15 @@ export default {
       if (media) {
         const audio = this.tracks[chrome.cast.media.TrackType.AUDIO];
         if (audio === undefined) return;
-        let req = [];
+        let req = [], found = false;
         for (let i = 0; i < audio.length; ++i) {
           if (audio[i].active) {
             req.push(audio[++i % audio.length].id);
+            found = true;
             break;
           }
         }
+        if (!found) req.push(audio[0].id);
 
         Object.keys(this.tracks).forEach(e => {
           e = parseInt(e);
@@ -473,7 +494,7 @@ export default {
         });
 
         let success = () => {
-          let active = 0;
+          let active = -1;
           audio.forEach(e => e.active = false);
           media.activeTrackIds.forEach(e => {
             if (this.tracks[e].type == chrome.cast.media.TrackType.AUDIO) {
@@ -537,7 +558,7 @@ export default {
       }
       this.duration = event.value && event.value.duration;
 
-      if (this.loaded && !this.tracks.loaded) {
+      if (this.duration && this.loaded && !this.tracks.loaded) {
         var tracks = event.value && event.value.tracks;
         if (tracks) {
           tracks.forEach(e => {
@@ -551,14 +572,14 @@ export default {
 
         const castSession = window.cast.framework.CastContext.getInstance().getCurrentSession();
         const media = castSession.getMediaSession();
-        if (media) media.activeTrackIds.forEach(e => this.tracks[e].active = true);
+        if (media && media.activeTrackIds) media.activeTrackIds.forEach(e => this.tracks[e].active = true);
 
         this.log('[mediacast:onMediaInfoChanged] - tracks loaded');
         Object.keys(this.tracks).forEach(e => {
           if (Array.isArray(this.tracks[e]))
             this.log('[mediacast:onMediaInfoChanged] -', e, 'tracks found:', this.tracks[e].length);
         });
-        if (media) media.activeTrackIds.forEach(e =>
+        if (media && media.activeTrackIds) media.activeTrackIds.forEach(e =>
           this.log('[mediacast:onMediaInfoChanged] - Track', e, 'is active'));
       }
     },
@@ -606,9 +627,10 @@ export default {
     },
 
     log(...message) {
-      console.log(message.join(' '));
+      let ts = new Date().toLocaleTimeString('en-GB');
+      console.log(ts + ' ' + message.join(' '));
       // debugLog gets updated and passed to <Log /> prop.
-      this.debugLog = this.debugLog.concat(message.join(' '));
+      this.debugLog = this.debugLog.concat(ts + ' ' + message.join(' '));
     },
   }
 }
