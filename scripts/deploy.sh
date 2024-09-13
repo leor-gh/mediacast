@@ -17,6 +17,7 @@ npm run build
 
 # npm build deletes the dist directory.  need to restore the worktree config
 echo gitdir: ../.git/worktrees/dist > dist/.git
+touch dist/.nojekyll
 
 # navigate into the build output directory
 cd dist
